@@ -28,8 +28,7 @@ with DAG(
     
     task_check = BashOperator(
             task_id="check.done",
-            bash_command="bash {{var.value.CHECK_SH}} {{ds_nodash}}"
-    )
+            bash_command="bash {{var.value.CHECK_SH}} {{var.value.DONE_PATH}}/bash_done/{{ds_nodash}}/_DONE"    )
             
     task_csv = BashOperator(
             task_id="to.csv",
@@ -37,16 +36,31 @@ with DAG(
                 echo "to.csv"
                 U_PATH=~/data/count/{{ds_nodash}}/count.log
                 CSV_PATH=~/data/csv/{{ds_nodash}}
+                CSV_FILE=~/data/csv/{{ds_nodash}}/csv.csv
+
                 mkdir -p $CSV_PATH
-                cat ${U_PATH} | awk '{print "{{ds}}", $2 "," $1}' > ${CSV_PATH}/csv.csv
+
+                #cat $U_PATH | awk '{print "\\"{{ds}}\\",\\"" $2 "\\",\\"" $1 "\\""}' > ${CSV_FILE}
+                cat $U_PATH | awk '{print "^{{ds}}^,^" $2 "^,^" $1 "^"}' > ${CSV_FILE}
+                echo $CSV_PATH
     """
     )
 
+    task_create_table = BashOperator(
+            task_id="create.table",
+            bash_command="""
+                SQL={{var.value.SQL_PATH}}/create_db_table.sql
+                echo "SQL_PATH=$SQL"
+                mysql < $SQL
+            """
+    )
 
     task_tmp = BashOperator(
             task_id="to.tmp",
             bash_command="""
-                echo "to tmp"
+                echo "to.tmp"
+                CSV_FILE=~/data/csv/{{ds_nodash}}/csv.csv
+                bash {{var.value.SH_HOME}}/csv2mysql.sh $CSV_FILE {{ds}} 
             """
     )
 
@@ -54,16 +68,10 @@ with DAG(
             task_id="to.base",
             bash_command="""
                 echo "to base"
-            """
+                bash {{var.value.SH_HOME}}/tmp2base.sh {{ds}}
+                """
     )
-
-    task_done = BashOperator(
-            task_id="make.done",
-            bash_command="""
-                echo "done"
-            """
-    )
-
+    
     task_err = BashOperator(
             task_id="err.report",
             bash_command="""
@@ -72,10 +80,25 @@ with DAG(
             trigger_rule="one_failed"
     )
 
+    task_done = BashOperator(
+            task_id="make.done",
+            bash_command="""
+                #DONE_PATH=~/data/import_done/{{ds_nodash}}
+                #mkdir -p ${DONE_PATH}
+                #touch ${DONE_PATH}/_DONE
+                DONE_PATH={{var.value.DONE_PATH}}/import_done/{{ds_nodash}}
+                mkdir -p $DONE_PATH
+                touch $DONE_PATH/_DONE
+
+                figlet "make.done.end"
+            """
+    )
+
+
     task_start = EmptyOperator(task_id='start')
     task_end = EmptyOperator(task_id='end', trigger_rule="all_done")
 
     task_start >> task_check 
-    task_check >> task_csv >> task_tmp >> task_base >> task_done >> task_end
+    task_check >> task_csv >> task_create_table >> task_tmp >> task_base >> task_done >> task_end
     task_check >> task_err >> task_end
 

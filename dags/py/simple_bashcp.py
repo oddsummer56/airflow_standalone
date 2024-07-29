@@ -8,7 +8,7 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.empty import EmptyOperator 
 with DAG(
-        'simple-bash',
+        'simple-bash-back',
     # TDummyOperatorhese args will get passed on to each operator
     # You can override them on a per-task basis during operator initialization
     default_args={
@@ -16,7 +16,7 @@ with DAG(
         'retries': 1,
         'retry_delay': timedelta(seconds=3)
     },
-    description='make history count.log',
+    description='hello world DAG',
     #schedule=timedelta(days=1),
     schedule='10 4 * * *',
     start_date=datetime(2024, 7, 10),
@@ -45,7 +45,7 @@ with DAG(
             task_id="copy.log",
             bash_command ="""
                 mkdir -p ~/data/{{ds_nodash}}
-                cp /home/oddsummer/tmp/history_log/history_{{ds_nodash}}*.log ~/data/{{ds_nodash}}/
+                cp ~/history_{{ds_nodash}}*.log ~/data/{{ds_nodash}}/
             """
     )
 
@@ -88,10 +88,11 @@ with DAG(
     task_done = BashOperator(
             task_id="make.done",
             bash_command="""
-                DONE_PATH=~/data/done/bash_done/{{ds_nodash}}
+                DONE_PATH=~/data/done/{{ds_nodash}}
                 mkdir -p  ${DONE_PATH}
                 touch ${DONE_PATH}/_DONE
             """
+
     )
 
     task_end = EmptyOperator(task_id='end', trigger_rule="all_done")
