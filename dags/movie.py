@@ -5,9 +5,15 @@ from pprint import pprint
 from airflow import DAG
 
 from airflow.operators.bash import BashOperator
-from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import BranchPythonOperator
 from airflow.models import Variable
+from airflow.operators.python import (
+    ExternalPythonOperator,
+    PythonOperator,
+    PythonVirtualenvOperator,
+    is_venv_installed,
+)
 
 def gen_emp(id, rule="all_success"):
     op = EmptyOperator(task_id=id, trigger_rule=rule)
@@ -31,53 +37,84 @@ with DAG(
 
     # t1, t2 and t3 are examples of tasks created by instantiating operators
     
-    def get_data(**kwargs):
-        #print(ds)
-        print(kwargs)
-        print("="*20)
-        print(f"ds_nodash => {kwargs['ds_nodash']}")
-        print(f"kwargs type => {type(kwargs)}")
-        print("="*20)
-        from mov.api.call import get_key, save2df
-        key = get_key()
-        print(f"MOVIE_API_KEY => {key}")
-        YYYYMMDD = kwargs['ds_nodash']
-        df=save2df(YYYYMMDD)
+    def get_data(ds_nodash):
+        from mov.api.call import save2df
+        df=save2df(ds_nodash)
         print(df.head(5))
+    
+    def save_data(ds_nodash):
+        from mov.api.call import apply_type2df
+
+        df = apply_type2df(load_dt=ds_nodash)
+        print(df.head(10))
+        print("*"*33)
+        print(df.dtypes)
+       
+       # 개봉일 기준 그룹핑 누적 관개수 합
+       print("개봉일 기준 그룹핑 누적 관객수 합")
+       g = df.groupby('openDt')
+       sum_df = g.agg({'audCnt': 'sum'}).reset_index()
+       print(sum_df)
+
+    def branch_fun(**kwargs):
+        ld  = kwargs['ds_nodash']
+        import os
+        home_dir = os.path.expanduser("~")
+        path = os.path.join(home_dir, f"tmp/test_parquet/load_dt={ld}")
+        print(path)
         
+        if os.path.exists(path):
+            return "rm.dir" #task_id
+        else:
+            return "get.data" , "echo.task"
 
-    def print_context(ds=None, **kwargs):
-        print("::group::All kwargs")
-        pprint(kwargs)
-        print(kwargs)
-        print("::end group::")
-        print("::group::Context variable ds")
-        print(ds)
-        print("::end group::")
-        return "Whatever you return gets printed in the logs"
-
-    run_this = PythonOperator( 
-            task_id="print.context",
-            python_callable=print_context
+    branch_op = BranchPythonOperator(
+            task_id="branch.op",
+            python_callable=branch_fun
             )
 
-    task_getdata = PythonOperator(
+
+    task_getdata = PythonVirtualenvOperator(
             task_id="get.data",
-            python_callable=get_data
+            python_callable=get_data,
+            requirements=["git+https://github.com/oddsummer56/movie.git@0.3/api"],
+            system_site_packages=False,
+            trigger_rule = "all_done",
+            venv_cache_path="/home/oddsummer/tmp/airflow_venv/get_data"
             )
 
 
-    task_savedata = BashOperator(
+    task_savedata = PythonVirtualenvOperator(
             task_id="save.data",
-            bash_command="""
-                echo "save.data"
+            python_callable=save_data,
+            requirements=["git+https://github.com/oddsummer56/movie.git@0.3/api"],
+            system_site_packages=False,
+            trigger_rule = "one_success",
+            venv_cache_path="/home/oddsummer/tmp/airflow_venv/get_data"
+    )
 
-    """
+    rm_dir = BashOperator(
+            task_id="rm.dir",
+            bash_command='rm -rf ~/tmp/test_parquet/load_dt={{ds_nodash}}',
+    )
+
+    echo_task = BashOperator(
+            task_id='echo.task',
+            bash_command="echo 'task'"
     )
 
     task_start = gen_emp('start')
     task_end = gen_emp('end', 'all_done')
-    
-    task_start >> task_getdata >> task_savedata
-    task_start >> run_this >> task_end
+    join_task = BashOperator(
+            task_id='join',
+            bash_command="exit 1",
+            trigger_rule="all_done"
+    )
+
+    task_start >> join_task >> task_savedata
+    task_start >> branch_op >> echo_task >>task_savedata
+    branch_op >> rm_dir >> task_getdata 
+    branch_op >> task_getdata
+    task_getdata >> task_savedata 
+    task_savedata >> task_end
 
